@@ -12,62 +12,7 @@
 
 #include "WiFiManager.h"
 
-WiFiManagerParameter::WiFiManagerParameter(const char *custom) {
-  _id = NULL;
-  _placeholder = NULL;
-  _length = 0;
-  _value = NULL;
-
-  _customHTML = custom;
-}
-
-WiFiManagerParameter::WiFiManagerParameter(const char *id, const char *placeholder, const char *defaultValue, int length) {
-  init(id, placeholder, defaultValue, length, "");
-}
-
-WiFiManagerParameter::WiFiManagerParameter(const char *id, const char *placeholder, const char *defaultValue, int length, const char *custom) {
-  init(id, placeholder, defaultValue, length, custom);
-}
-
-void WiFiManagerParameter::init(const char *id, const char *placeholder, const char *defaultValue, int length, const char *custom) {
-  _id = id;
-  _placeholder = placeholder;
-  _length = length;
-  _value = new char[length + 1];
-  for (int i = 0; i < length; i++) {
-    _value[i] = 0;
-  }
-  if (defaultValue != NULL) {
-    strncpy(_value, defaultValue, length);
-  }
-
-  _customHTML = custom;
-}
-
-const char* WiFiManagerParameter::getValue() {
-  return _value;
-}
-const char* WiFiManagerParameter::getID() {
-  return _id;
-}
-const char* WiFiManagerParameter::getPlaceholder() {
-  return _placeholder;
-}
-int WiFiManagerParameter::getValueLength() {
-  return _length;
-}
-const char* WiFiManagerParameter::getCustomHTML() {
-  return _customHTML;
-}
-
 WiFiManager::WiFiManager() {
-}
-
-void WiFiManager::addParameter(WiFiManagerParameter *p) {
-  _params[_paramsCount] = p;
-  _paramsCount++;
-  DEBUG_WM("Adding parameter");
-  DEBUG_WM(p->getID());
 }
 
 void WiFiManager::setupConfigPortal() {
@@ -110,12 +55,7 @@ void WiFiManager::setupConfigPortal() {
 
   /* Setup web pages: root, wifi config pages, SO captive portal detectors and not found. */
   server->on("/", std::bind(&WiFiManager::handleRoot, this));
-  server->on("/wifi", std::bind(&WiFiManager::handleWifi, this, true));
-  server->on("/0wifi", std::bind(&WiFiManager::handleWifi, this, false));
-  server->on("/wifisave", std::bind(&WiFiManager::handleWifiSave, this));
-  server->on("/confwifi", std::bind(&WiFiManager::handleTestJson, this));
-  //server->on("/generate_204", std::bind(&WiFiManager::handle204, this));  //Android/Chrome OS captive portal check.
-  server->on("/fwlink", std::bind(&WiFiManager::handleRoot, this));  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
+  server->on("/confwifi", std::bind(&WiFiManager::handleConfWifi, this));
   server->onNotFound (std::bind(&WiFiManager::handleNotFound, this));
   server->begin(); // Web server start
   DEBUG_WM(F("HTTP server started"));
@@ -178,6 +118,7 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
       // using user-provided  _ssid, _pass in place of system-stored ssid and pass
       if (connectWifi(_ssid, _pass) != WL_CONNECTED) {
         DEBUG_WM(F("Failed to connect."));
+        ESP.reset();
       } else {
         //connected
         WiFi.mode(WIFI_STA);
@@ -230,6 +171,7 @@ int WiFiManager::connectWifi(String ssid, String pass) {
     if (WiFi.SSID()) {
       DEBUG_WM("Using last saved values...");
       //trying to fix connection in progress hanging
+      //disable UART interrupts
       ETS_UART_INTR_DISABLE();
       wifi_station_disconnect();
       ETS_UART_INTR_ENABLE();
@@ -280,27 +222,7 @@ void WiFiManager::startWPS() {
   WiFi.beginWPSConfig();
   DEBUG_WM("END WPS");
 }
-/*
-  String WiFiManager::getSSID() {
-  if (_ssid == "") {
-    DEBUG_WM(F("Reading SSID"));
-    _ssid = WiFi.SSID();
-    DEBUG_WM(F("SSID: "));
-    DEBUG_WM(_ssid);
-  }
-  return _ssid;
-  }
 
-  String WiFiManager::getPassword() {
-  if (_pass == "") {
-    DEBUG_WM(F("Reading Password"));
-    _pass = WiFi.psk();
-    DEBUG_WM("Password: " + _pass);
-    //DEBUG_WM(_pass);
-  }
-  return _pass;
-  }
-*/
 String WiFiManager::getConfigPortalSSID() {
   return _apName;
 }
@@ -347,242 +269,12 @@ void WiFiManager::setBreakAfterConfig(boolean shouldBreak) {
   _shouldBreakAfterConfig = shouldBreak;
 }
 
-/** Handle root or redirect to captive portal */
 void WiFiManager::handleRoot() {
   DEBUG_WM(F("Handle root"));
-  if (captivePortal()) { // If caprive portal redirect instead of displaying the page.
-    return;
-  }
-
-  String page = FPSTR(HTTP_HEAD);
-  page.replace("{v}", "Options");
-  page += FPSTR(HTTP_SCRIPT);
-  page += FPSTR(HTTP_STYLE);
-  page += _customHeadElement;
-  page += FPSTR(HTTP_HEAD_END);
-  page += "<h1>";
-  page += _apName;
-  page += "</h1>";
-  page += F("<h3>WiFiManager</h3>");
-  page += FPSTR(HTTP_PORTAL_OPTIONS);
-  page += FPSTR(HTTP_END);
-
-  server->send(200, "text/html", page);
-
 }
 
-/** Wifi config page handler */
-void WiFiManager::handleWifi(boolean scan) {
-
-  String page = FPSTR(HTTP_HEAD);
-  page.replace("{v}", "Config ESP");
-  page += FPSTR(HTTP_SCRIPT);
-  page += FPSTR(HTTP_STYLE);
-  page += _customHeadElement;
-  page += FPSTR(HTTP_HEAD_END);
-
-  if (scan) {
-    int n = WiFi.scanNetworks();
-    DEBUG_WM(F("Scan done"));
-    if (n == 0) {
-      DEBUG_WM(F("No networks found"));
-      page += F("No networks found. Refresh to scan again.");
-    } else {
-
-      //sort networks
-      int indices[n];
-      for (int i = 0; i < n; i++) {
-        indices[i] = i;
-      }
-
-      // RSSI SORT
-
-      // old sort
-      for (int i = 0; i < n; i++) {
-        for (int j = i + 1; j < n; j++) {
-          if (WiFi.RSSI(indices[j]) > WiFi.RSSI(indices[i])) {
-            std::swap(indices[i], indices[j]);
-          }
-        }
-      }
-
-      /*std::sort(indices, indices + n, [](const int & a, const int & b) -> bool
-        {
-        return WiFi.RSSI(a) > WiFi.RSSI(b);
-        });*/
-
-      // remove duplicates ( must be RSSI sorted )
-      if (_removeDuplicateAPs) {
-        String cssid;
-        for (int i = 0; i < n; i++) {
-          if (indices[i] == -1) continue;
-          cssid = WiFi.SSID(indices[i]);
-          for (int j = i + 1; j < n; j++) {
-            if (cssid == WiFi.SSID(indices[j])) {
-              DEBUG_WM("DUP AP: " + WiFi.SSID(indices[j]));
-              indices[j] = -1; // set dup aps to index -1
-            }
-          }
-        }
-      }
-
-      //display networks in page
-      for (int i = 0; i < n; i++) {
-        if (indices[i] == -1) continue; // skip dups
-        DEBUG_WM(WiFi.SSID(indices[i]));
-        DEBUG_WM(WiFi.RSSI(indices[i]));
-        int quality = getRSSIasQuality(WiFi.RSSI(indices[i]));
-
-        if (_minimumQuality == -1 || _minimumQuality < quality) {
-          String item = FPSTR(HTTP_ITEM);
-          String rssiQ;
-          rssiQ += quality;
-          item.replace("{v}", WiFi.SSID(indices[i]));
-          item.replace("{r}", rssiQ);
-          if (WiFi.encryptionType(indices[i]) != ENC_TYPE_NONE) {
-            item.replace("{i}", "l");
-          } else {
-            item.replace("{i}", "");
-          }
-          //DEBUG_WM(item);
-          page += item;
-          delay(0);
-        } else {
-          DEBUG_WM(F("Skipping due to quality"));
-        }
-
-      }
-      page += "<br/>";
-    }
-  }
-
-  page += FPSTR(HTTP_FORM_START);
-  char parLength[2];
-  // add the extra parameters to the form
-  for (int i = 0; i < _paramsCount; i++) {
-    if (_params[i] == NULL) {
-      break;
-    }
-
-    String pitem = FPSTR(HTTP_FORM_PARAM);
-    if (_params[i]->getID() != NULL) {
-      pitem.replace("{i}", _params[i]->getID());
-      pitem.replace("{n}", _params[i]->getID());
-      pitem.replace("{p}", _params[i]->getPlaceholder());
-      snprintf(parLength, 2, "%d", _params[i]->getValueLength());
-      pitem.replace("{l}", parLength);
-      pitem.replace("{v}", _params[i]->getValue());
-      pitem.replace("{c}", _params[i]->getCustomHTML());
-    } else {
-      pitem = _params[i]->getCustomHTML();
-    }
-
-    page += pitem;
-  }
-  if (_params[0] != NULL) {
-    page += "<br/>";
-  }
-
-  if (_sta_static_ip) {
-
-    String item = FPSTR(HTTP_FORM_PARAM);
-    item.replace("{i}", "ip");
-    item.replace("{n}", "ip");
-    item.replace("{p}", "Static IP");
-    item.replace("{l}", "15");
-    item.replace("{v}", _sta_static_ip.toString());
-
-    page += item;
-
-    item = FPSTR(HTTP_FORM_PARAM);
-    item.replace("{i}", "gw");
-    item.replace("{n}", "gw");
-    item.replace("{p}", "Static Gateway");
-    item.replace("{l}", "15");
-    item.replace("{v}", _sta_static_gw.toString());
-
-    page += item;
-
-    item = FPSTR(HTTP_FORM_PARAM);
-    item.replace("{i}", "sn");
-    item.replace("{n}", "sn");
-    item.replace("{p}", "Subnet");
-    item.replace("{l}", "15");
-    item.replace("{v}", _sta_static_sn.toString());
-
-    page += item;
-
-    page += "<br/>";
-  }
-
-  page += FPSTR(HTTP_FORM_END);
-  page += FPSTR(HTTP_SCAN_LINK);
-
-  page += FPSTR(HTTP_END);
-  server->send(200, "text/html", page);
-
-
-  DEBUG_WM(F("Sent config page"));
-}
-
-/** Handle the WLAN save form and redirect to WLAN config page again */
-void WiFiManager::handleWifiSave() {
-  DEBUG_WM(F("WiFi save"));
-
-  //SAVE/connect here
-  _ssid = server->arg("s").c_str();
-  _pass = server->arg("p").c_str();
-  //parameters
-  for (int i = 0; i < _paramsCount; i++) {
-    if (_params[i] == NULL) {
-      break;
-    }
-    //read parameter
-    String value = server->arg(_params[i]->getID()).c_str();
-    //store it in array
-    value.toCharArray(_params[i]->_value, _params[i]->_length);
-    DEBUG_WM(F("Parameter"));
-    DEBUG_WM(_params[i]->getID());
-    DEBUG_WM(value);
-  }
-
-  if (server->arg("ip") != "") {
-    DEBUG_WM(F("static ip"));
-    DEBUG_WM(server->arg("ip"));
-    //_sta_static_ip.fromString(server->arg("ip"));
-    String ip = server->arg("ip");
-    optionalIPFromString(&_sta_static_ip, ip.c_str());
-  }
-  if (server->arg("gw") != "") {
-    DEBUG_WM(F("static gateway"));
-    DEBUG_WM(server->arg("gw"));
-    String gw = server->arg("gw");
-    optionalIPFromString(&_sta_static_gw, gw.c_str());
-  }
-  if (server->arg("sn") != "") {
-    DEBUG_WM(F("static netmask"));
-    DEBUG_WM(server->arg("sn"));
-    String sn = server->arg("sn");
-    optionalIPFromString(&_sta_static_sn, sn.c_str());
-  }
-  String page = FPSTR(HTTP_HEAD);
-  page.replace("{v}", "Credentials Saved");
-  page += FPSTR(HTTP_SCRIPT);
-  page += FPSTR(HTTP_STYLE);
-  page += _customHeadElement;
-  page += FPSTR(HTTP_HEAD_END);
-  page += FPSTR(HTTP_SAVED);
-  page += FPSTR(HTTP_END);
-
-  server->send(200, "text/html", page);
-
-  DEBUG_WM(F("Sent wifi save page"));
-
-  connect = true; //signal ready to connect/reset
-}
-
-void WiFiManager::handleTestJson() {
-  DEBUG_WM(F("Test Json"));
+void WiFiManager::handleConfWifi() {
+  DEBUG_WM(F("SSID an PASS are saved"));
   StaticJsonBuffer<100> jsonBuffer;
   if (server->arg("plain") != "") {
     String content = server->arg("plain");
