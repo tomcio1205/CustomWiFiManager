@@ -101,6 +101,7 @@ class WiFiManager
     boolean       _removeDuplicateAPs     = true;
     boolean       _shouldBreakAfterConfig = false;
     boolean       _tryWPS                 = false;
+    boolean		  _breakAP				  = false;
 
     const char*   _customHeadElement      = "";
 

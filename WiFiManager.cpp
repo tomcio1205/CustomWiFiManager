@@ -118,7 +118,7 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
       // using user-provided  _ssid, _pass in place of system-stored ssid and pass
       if (connectWifi(_ssid, _pass) != WL_CONNECTED) {
         DEBUG_WM(F("Failed to connect."));
-        ESP.reset();
+        // ESP.reset();
       } else {
         //connected
         WiFi.mode(WIFI_STA);
@@ -274,18 +274,26 @@ void WiFiManager::handleRoot() {
 }
 
 void WiFiManager::handleConfWifi() {
-  DEBUG_WM(F("SSID an PASS are saved"));
-  StaticJsonBuffer<100> jsonBuffer;
+
   if (server->arg("plain") != "") {
+    DEBUG_WM(F("SSID an PASS are saved"));
+    DEBUG_WM(server->arg("plain"));
+    StaticJsonBuffer<100> jsonBuffer;
     String content = server->arg("plain");
     JsonObject& root = jsonBuffer.parseObject(content.c_str());
     String ssid = root["ssid"];
     String pass = root["pass"];
     _ssid = ssid;
     _pass = pass;
+    server->send(200, "text/html", "Everything ok. Trying to connect...");
+    // connect = true; 
   }
-  server->send(200, "text/html", "Everything ok. Trying to connect...");
-  connect = true; 
+  else {
+    DEBUG_WM(F("Only checking connection :P"));
+    uint8_t status;
+    status = WiFi.status();
+    DEBUG_WM(status);
+  }
 }
 
 void WiFiManager::handleNotFound() {
@@ -315,6 +323,7 @@ void WiFiManager::handleNotFound() {
 boolean WiFiManager::captivePortal() {
   if (!isIp(server->hostHeader()) ) {
     DEBUG_WM(F("Request redirected to captive portal"));
+    //we commented this because after connection to AP we were redirected to this site 
     server->sendHeader("Location", String("http://") + toStringIp(server->client().localIP()), true);
     server->send ( 302, "text/plain", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
     server->client().stop(); // Stop is needed because we sent no content length
